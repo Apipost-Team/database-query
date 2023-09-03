@@ -1,7 +1,11 @@
+const { async } = require('rxjs');
+
 const mysql = require('mysql2'),
   mssql = require('mssql'),
   MongoClient = require('mongodb').MongoClient,
   { Pool } = require('pg'),
+  { createClient } = require('redis'),
+  db = require('dmdb'),
   oracledb = require('oracledb'),
   { ClickHouse } = require('clickhouse'),
   { Client } = require('ssh2'),
@@ -14,7 +18,17 @@ const mysql = require('mysql2'),
     "type": "object",
     "properties": {
       "type": {
-        "type": "string"
+        "type": "string",
+        "enum": [
+          "mysql",
+          "mssql",
+          "oracle",
+          "redis",
+          "clickhouse",
+          "dmdb",
+          "mongodb",
+          "pg"
+        ]
       },
       "dbconfig": {
         "type": "object",
@@ -262,7 +276,7 @@ const DBExec = {
         _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
       }
     })
-  }, // to test
+  }, // to test todo
   mongodb: function (dbconfig, query, resolve, reject, sshClient) {
     if (!_.isString(dbconfig.collectionName)) {
       reject({
@@ -278,7 +292,7 @@ const DBExec = {
           if (query == '' || !_.isString(query)) {
             query = `{}`;
           }
-
+          // collection.
           collection.findOne(JSON5.parse(query)).then((results) => {
             resolve({
               err: 'success',
@@ -309,14 +323,107 @@ const DBExec = {
         _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
       });
     }
-  } // 目前仅支持 findOne 的操作，Finished
+  }, // 目前仅支持 findOne 的操作，Finished to select method
+  redis: async function (dbconfig, query, resolve, reject, sshClient) {
+    const client = createClient({
+      url: `redis://${dbconfig.user}:${dbconfig.password}@${dbconfig.host}:${dbconfig.port > 0 ? dbconfig.port : 6380}/${dbconfig.database ? dbconfig.database : 1}`
+    });
+
+    try {
+      await client.connect();
+      const results = await client[query?.method](...Object.values(query?.para));
+      resolve({
+        err: 'success',
+        result: results
+      })
+    } catch (err) {
+      reject({
+        err: 'error',
+        result: `Redis ${String(err)}`
+      })
+    }
+
+    if (_.isFunction(client.disconnect)) {
+      await client.disconnect();
+    }
+
+    _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
+  }, // Finished
+  dmdb: async function (dbconfig, query, resolve, reject, sshClient) {
+    let pool, conn;
+    try {
+      pool = await createPool();
+      conn = await getConnection();
+      let results = await queryWithResultSet(query);
+      resolve({
+        err: 'success',
+        result: results
+      })
+    } catch (err) {
+      reject({
+        err: 'error',
+        result: `Dmdb ${String(err)}`
+      })
+    } finally {
+      try {
+        await conn.close();
+        await pool.close();
+      } catch (err) {
+        reject({
+          err: 'error',
+          result: `Dmdb ${String(err)}`
+        })
+      }
+    }
+
+    _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
+
+    /* 创建连接池 */
+    async function createPool() {
+      try {
+        return db.createPool({
+          connectString: `dm://${dbconfig.user}:${dbconfig.password}@${dbconfig.host}:${dbconfig.port > 0 ? dbconfig.port : 5236}?autoCommit=false`,
+          poolMax: 10,
+          poolMin: 1
+        });
+      } catch (err) {
+        throw new Error("createPool error: " + err.message);
+      }
+    }
+    /* 获取数据库连接 */
+    async function getConnection() {
+      try {
+        return pool.getConnection();
+      } catch (err) {
+        throw new Error("getConnection error: " + err.message);
+      }
+    }
+    /* 查询产品信息表 */
+    async function queryWithResultSet(sql) {
+      try {
+        var result = await conn.execute(sql, [], { resultSet: true });
+        var resultSet = result.resultSet;
+        // 从结果集中获取一行
+        let results = [];
+        result = await resultSet.getRow();
+        while (result) {
+          results.push(result);
+          result = await resultSet.getRow();
+        }
+
+        return results;
+      } catch (err) {
+        throw new Error("queryWithResultSet error: " + err.message);
+      }
+    }
+  } // Finished
 }
 
 function DatabaseQuery(option, query) {
   // 校验参数
   let tv4res = tv4.validateResult(option, schema);
 
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
     if (!tv4res?.valid) {
       reject({
         err: 'error',
@@ -324,10 +431,17 @@ function DatabaseQuery(option, query) {
       })
     }
 
-    if (!_.isString(query)) {
+    if (!_.isString(query) && ['mysql', 'mssql', 'pg', 'clickhouse', 'oracle', 'mongodb', 'dmdb'].indexOf(option.type) > -1) {
       reject({
         err: 'error',
         result: 'Request parameter query must be a string'
+      })
+    }
+
+    if (!_.isObject(query) && ['redis'].indexOf(option.type) > -1) {
+      reject({
+        err: 'error',
+        result: 'Request parameter query must be a Object'
       })
     }
 
@@ -346,7 +460,7 @@ function DatabaseQuery(option, query) {
               privateKey: fs.readFileSync(ssh.privateKey)
             });
             break;
-          case 3: // 公钥
+          case 3: // 公钥+密码
             _.assign(sshConfig, {
               host: ssh.host,
               port: ssh.port ? ssh.port : 22,
@@ -383,7 +497,7 @@ function DatabaseQuery(option, query) {
         timeout: Number(option.dbconfig.timeout) >= 0 ? Number(option.dbconfig.timeout) : 10000
       });
 
-      const _DBExec = DBExec[option.type];
+      const _DBExec = await DBExec[option.type];
 
       if (option.ssh.enable > 0) {
         const sshClient = new Client();
@@ -413,6 +527,11 @@ function DatabaseQuery(option, query) {
                   case 'mssql':
                     _.assign(_dbconfig, {
                       port: stream.localPort
+                    })
+                    break;
+                  case 'redis':
+                    _.assign(_dbconfig, {
+                      socket: stream
                     })
                     break;
                 }
