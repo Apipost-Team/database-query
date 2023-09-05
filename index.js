@@ -251,32 +251,23 @@ const DBConnectTest = {
     }
   }, // to test todo
   mongodb: function (dbconfig, resolve, reject, sshClient) {
-    if (!_.isString(dbconfig.collectionName)) {
+    MongoClient.connect(`mongodb://${dbconfig.user}:${dbconfig.password}@${dbconfig.host}:${dbconfig.port > 0 ? dbconfig.port : 27017}/${dbconfig.database}`).then((client) => {
+
+      resolve({
+        err: 'success',
+        result: `MongoDB connect success.`
+      })
+
+      _.isFunction(client.close) && client.close();
+    }).catch((err) => {
       reject({
         err: 'error',
-        result: `Incorrect collectionName name`
-      });
+        result: `MongoDB connect error: ${String(err)}`
+      })
+    }).finally(() => {
+
       _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
-    } else {
-      MongoClient.connect(`mongodb://${dbconfig.user}:${dbconfig.password}@${dbconfig.host}:${dbconfig.port > 0 ? dbconfig.port : 27017}/${dbconfig.database}`).then((client) => {
-        client.db(dbconfig.database).collection(dbconfig.collectionName);
-
-        resolve({
-          err: 'success',
-          result: `MongoDB connect success.`
-        })
-
-        _.isFunction(client.close) && client.close();
-      }).catch((err) => {
-        reject({
-          err: 'error',
-          result: `MongoDB connect error: ${String(err)}`
-        })
-      }).finally(() => {
-
-        _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
-      });
-    }
+    });
   }, // 目前仅支持 findOne 的操作，Finished to select method
   redis: async function (dbconfig, resolve, reject, sshClient) {
     const client = createClient({
@@ -545,42 +536,58 @@ const DBExec = {
     }
   }, // to test todo
   mongodb: function (dbconfig, query, resolve, reject, sshClient) {
-    if (!_.isString(dbconfig.collectionName)) {
+    if (!_.isString(_.get(query, 'collectionName'))) {
       reject({
         err: 'error',
         result: `Incorrect collectionName name`
       });
       _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
     } else {
+      let _collectionName = _.get(query, 'collectionName');
+      let _method = _.get(query, 'method');
+      let _data = _.get(query, 'data');
+
       MongoClient.connect(`mongodb://${dbconfig.user}:${dbconfig.password}@${dbconfig.host}:${dbconfig.port > 0 ? dbconfig.port : 27017}/${dbconfig.database}`).then((client) => {
-        const collection = client.db(dbconfig.database).collection(dbconfig.collectionName);
-        // 查询文档
-        try {
-          if (query == '' || !_.isString(query)) {
-            query = `{}`;
-          }
-          // collection.
-          collection.findOne(JSON5.parse(query)).then((results) => {
-            resolve({
-              err: 'success',
-              result: [JSON5.parse(JSON5.stringify(results))]
-            })
-          }).catch((err) => {
+        const collection = client.db(dbconfig.database).collection(_collectionName);
+
+        if (_.isFunction(collection[_method])) {
+          // 查询文档
+          try {
+            let _para_data = {};
+
+            if (_.isString(_data)) {
+              try {
+                _para_data = JSON5.parse(_data);
+              } catch (e) { }
+            } else if (_.isObject(_data)) {
+              _para_data = _data;
+            }
+
+            collection[_method](_para_data).then((results) => {
+              resolve({
+                err: 'success',
+                result: [JSON5.parse(JSON5.stringify(results))]
+              })
+            }).catch((err) => {
+              reject({
+                err: 'error',
+                result: `MongoDB query error: ${String(err)}`
+              })
+            });
+          } catch (e) {
             reject({
               err: 'error',
-              result: `MongoDB query error: ${String(err)}`
+              result: `MongoDB query error: ${String(e)}`
             })
-          }).finally(() => {
-            _.isFunction(client.close) && client.close();
-            _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
-          });
-        } catch (e) {
-          _.isFunction(client.close) && client.close();
+          }
+        } else {
           reject({
             err: 'error',
-            result: `MongoDB query error: ${String(e)}`
+            result: `MongoDB connect error: ${_method} is not supported.`
           })
         }
+
+        _.isFunction(client.close) && client.close();
       }).catch((err) => {
         reject({
           err: 'error',
@@ -590,7 +597,7 @@ const DBExec = {
         _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
       });
     }
-  }, // 目前仅支持 findOne 的操作，Finished to select method
+  }, // todo
   redis: async function (dbconfig, query, resolve, reject, sshClient) {
     const client = createClient({
       url: `redis://${dbconfig.user}:${dbconfig.password}@${dbconfig.host}:${dbconfig.port > 0 ? dbconfig.port : 6380}/${dbconfig.database ? dbconfig.database : 1}`
@@ -598,11 +605,29 @@ const DBExec = {
 
     try {
       await client.connect();
-      const results = await client[query?.method](...Object.values(query?.para));
-      resolve({
-        err: 'success',
-        result: results
-      })
+
+      let data = [];
+
+      if (_.isString(query?.data)) {
+        try {
+          data = JSON5.parse(query?.data);
+        } catch (e) { }
+      } else if (_.isObject(query?.data)) {
+        data = query?.data;
+      }
+
+      if (_.isFunction(client[query?.method])) {
+        const results = await client[query?.method](..._.values(data));
+        resolve({
+          err: 'success',
+          result: results
+        })
+      } else {
+        reject({
+          err: 'error',
+          result: `Redis query error ${query?.method} is not supported.`
+        })
+      }
     } catch (err) {
       reject({
         err: 'error',
