@@ -114,7 +114,9 @@ const DBConnectTest = {
       }
 
       if (_.isFunction(connection.end)) {
-        connection.end();
+        try {
+          connection.end();
+        } catch (e) { }
       }
       _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
       return;
@@ -210,11 +212,14 @@ const DBConnectTest = {
   oracle: function (dbconfig, resolve, reject, sshClient) {
     try {
       dbconfig.port = _.isInteger(dbconfig.port) ? dbconfig.port : 1521;
-      oracledb.initOracleClient({ poolTimeout: dbconfig.timeout });
+      // oracledb.initOracleClient({ poolTimeout: dbconfig.timeout });
+      oracledb.initOracleClient({ libDir: '/usr/local/lib/' }); // 设置 Oracle Instant Client 的路径
+
       oracledb.getConnection(_.assign({
         user: dbconfig.user,
         password: dbconfig.password,
         connectString: `${dbconfig.host}:${dbconfig.port}/${dbconfig.database}`,
+        // driver: 'thin',
         sslVerifyCertificate: false
       }), (err, connection) => {
         if (err) {
@@ -366,7 +371,10 @@ const DBExec = {
         query,
         function (err, results) {
           _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
-          connection.end();
+
+          try {
+            connection.end();
+          } catch (e) { }
 
           if (err) {
             reject({
@@ -486,7 +494,7 @@ const DBExec = {
   oracle: function (dbconfig, query, resolve, reject, sshClient) {
     try {
       dbconfig.port = _.isInteger(dbconfig.port) ? dbconfig.port : 1521;
-      oracledb.initOracleClient({ poolTimeout: dbconfig.timeout });
+      // oracledb.initOracleClient({ poolTimeout: dbconfig.timeout });
       oracledb.getConnection(_.assign({
         user: dbconfig.user,
         password: dbconfig.password,
