@@ -213,7 +213,7 @@ const DBConnectTest = {
     try {
       dbconfig.port = _.isInteger(dbconfig.port) ? dbconfig.port : 1521;
       // oracledb.initOracleClient({ poolTimeout: dbconfig.timeout });
-      oracledb.initOracleClient({ libDir: '/usr/local/lib/' }); // 设置 Oracle Instant Client 的路径
+      // oracledb.initOracleClient({ libDir: '/usr/local/lib/' }); // 设置 Oracle Instant Client 的路径
 
       oracledb.getConnection(_.assign({
         user: dbconfig.user,
@@ -256,7 +256,7 @@ const DBConnectTest = {
     }
   }, // to test todo
   mongodb: function (dbconfig, resolve, reject, sshClient) {
-    MongoClient.connect(`mongodb://${dbconfig.user}:${dbconfig.password}@${dbconfig.host}:${dbconfig.port > 0 ? dbconfig.port : 27017}/${dbconfig.database}`).then((client) => {
+    MongoClient.connect(`mongodb://${dbconfig.user}:${dbconfig.password}@${dbconfig.host}:${dbconfig.port > 0 ? dbconfig.port : 27017}/${dbconfig.auth_source ? dbconfig.auth_source : dbconfig.database}`).then((client) => {
 
       resolve({
         err: 'success',
@@ -555,7 +555,7 @@ const DBExec = {
       let _method = _.get(query, 'method');
       let _data = _.get(query, 'data');
 
-      MongoClient.connect(`mongodb://${dbconfig.user}:${dbconfig.password}@${dbconfig.host}:${dbconfig.port > 0 ? dbconfig.port : 27017}/${dbconfig.database}`).then((client) => {
+      MongoClient.connect(`mongodb://${dbconfig.user}:${dbconfig.password}@${dbconfig.host}:${dbconfig.port > 0 ? dbconfig.port : 27017}/${dbconfig.auth_source ? dbconfig.auth_source : dbconfig.database}`).then((client) => {
         const collection = client.db(dbconfig.database).collection(_collectionName);
 
         if (_.isFunction(collection[_method])) {
