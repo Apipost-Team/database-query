@@ -11,6 +11,7 @@ const mysql = require('mysql2'),
   tv4 = require('tv4'),
   fs = require('fs'),
   JSON5 = require('json5'),
+  path = require('path'),
   schema = {
     "$schema": "http://json-schema.org/draft-04/schema#",
     "type": "object",
@@ -96,31 +97,38 @@ const mysql = require('mysql2'),
 // 各种数据库测试连接对象
 const DBConnectTest = {
   mysql: function (dbconfig, resolve, reject, sshClient) {
-    const connection = mysql.createConnection(_.assign(dbconfig, {
-      port: _.isInteger(dbconfig.port) ? dbconfig.port : 3306
-    }));
+    try {
+      const connection = mysql.createConnection(_.assign(dbconfig, {
+        port: _.isInteger(dbconfig.port) ? Number(dbconfig.port) : 3306
+      }));
 
-    connection.connect((err) => {
-      if (err) {
-        reject({
-          err: 'error',
-          result: `MySQL connection error: ${String(err)}`
-        })
-      } else {
-        resolve({
-          err: 'success',
-          result: 'MySQL connection success.'
-        })
-      }
+      connection.connect((err) => {
+        if (err) {
+          reject({
+            err: 'error',
+            result: `MySQL connection error: ${String(err)}`
+          })
+        } else {
+          resolve({
+            err: 'success',
+            result: 'MySQL connection success.'
+          })
+        }
 
-      if (_.isFunction(connection.end)) {
-        try {
-          connection.end();
-        } catch (e) { }
-      }
-      _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
-      return;
-    });
+        if (_.isFunction(connection.end)) {
+          try {
+            connection.end();
+          } catch (e) { }
+        }
+        _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
+        return;
+      });
+    } catch (err) {
+      reject({
+        err: 'error',
+        result: `MySQL connection error: ${String(err)}`
+      })
+    }
   }, // Finished
   mssql: async function (dbconfig, resolve, reject, sshClient) {
     _.assign(dbconfig, {
@@ -212,14 +220,26 @@ const DBConnectTest = {
   oracle: function (dbconfig, resolve, reject, sshClient) {
     try {
       dbconfig.port = _.isInteger(dbconfig.port) ? dbconfig.port : 1521;
-      // oracledb.initOracleClient({ poolTimeout: dbconfig.timeout });
-      // oracledb.initOracleClient({ libDir: '/usr/local/lib/' }); // 设置 Oracle Instant Client 的路径
+
+      let libOpt = {};
+      switch (process.platform) {
+        case 'win32':
+          libOpt = { oracleClientMode: oracledb.ORACLE_CLIENT_THIN }
+          break;
+        case 'darwin':
+          libOpt = { libDir: '/usr/local/lib', oracleClientMode: oracledb.ORACLE_CLIENT_THIN }
+        case 'linux':
+          libOpt = { libDir: '/usr/local/lib', oracleClientMode: oracledb.ORACLE_CLIENT_THIN }
+          break;
+      }
+
+      oracledb.initOracleClient(libOpt); // 设置 Oracle Instant Client 的路径
 
       oracledb.getConnection(_.assign({
         user: dbconfig.user,
         password: dbconfig.password,
         connectString: `${dbconfig.host}:${dbconfig.port}/${dbconfig.database}`,
-        // driver: 'thin',
+        driver: 'thin',
         sslVerifyCertificate: false
       }), (err, connection) => {
         if (err) {
@@ -250,7 +270,7 @@ const DBConnectTest = {
     } catch (err) {
       reject({
         err: 'error',
-        result: `Oracle connect error: ${String(err.message)}`
+        result: `Oracle connect error: ${String(err).split("\n")[0]}`
       })
       _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
     }
@@ -494,7 +514,21 @@ const DBExec = {
   oracle: function (dbconfig, query, resolve, reject, sshClient) {
     try {
       dbconfig.port = _.isInteger(dbconfig.port) ? dbconfig.port : 1521;
-      // oracledb.initOracleClient({ poolTimeout: dbconfig.timeout });
+
+      let libOpt = {};
+      switch (process.platform) {
+        case 'win32':
+          libOpt = { oracleClientMode: oracledb.ORACLE_CLIENT_THIN }
+          break;
+        case 'darwin':
+          libOpt = { libDir: '/usr/local/lib', oracleClientMode: oracledb.ORACLE_CLIENT_THIN }
+        case 'linux':
+          libOpt = { libDir: '/usr/local/lib', oracleClientMode: oracledb.ORACLE_CLIENT_THIN }
+          break;
+      }
+
+      oracledb.initOracleClient(libOpt); // 设置 Oracle Instant Client 的路径
+
       oracledb.getConnection(_.assign({
         user: dbconfig.user,
         password: dbconfig.password,
@@ -538,7 +572,7 @@ const DBExec = {
     } catch (err) {
       reject({
         err: 'error',
-        result: `Oracle connect error: ${String(err)}`
+        result: `Oracle connect error: ${String(err).split("\n")[0]}`
       })
       _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
     }
@@ -923,7 +957,7 @@ function DatabaseConnectTest(option) {
         timeout: Number(option.dbconfig.timeout) >= 0 ? Number(option.dbconfig.timeout) : 10000
       });
 
-      const _DBExec = await DBConnectTest[option.type];
+      const _DBExec = await DBConnectTest[option?.type];
 
       if (option.ssh.enable > 0) {
         const sshClient = new Client();
