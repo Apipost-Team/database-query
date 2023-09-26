@@ -238,7 +238,7 @@ const DBConnectTest = {
       oracledb.getConnection(_.assign({
         user: dbconfig.user,
         password: dbconfig.password,
-        connectString: `${dbconfig.host}:${dbconfig.port}/${dbconfig.database}`,
+        connectString: `${dbconfig.host}:${dbconfig.port}/${dbconfig.database ? dbconfig.database : dbconfig.server}`,
         driver: 'thin',
         sslVerifyCertificate: false
       }), (err, connection) => {
@@ -532,7 +532,7 @@ const DBExec = {
       oracledb.getConnection(_.assign({
         user: dbconfig.user,
         password: dbconfig.password,
-        connectString: `${dbconfig.host}:${dbconfig.port}/${dbconfig.database}`,
+        connectString: `${dbconfig.host}:${dbconfig.port}/${dbconfig.database ? dbconfig.database : dbconfig.server}`,
         sslVerifyCertificate: false
       }), (err, connection) => {
         if (err) {
