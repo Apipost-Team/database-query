@@ -1,6 +1,6 @@
 {
   "name": "database-query",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Integration of a variety of formats a library database queries.",
   "main": "index.js",
   "scripts": {

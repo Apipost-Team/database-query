@@ -3,7 +3,6 @@ const mysql = require('mysql2'),
   MongoClient = require('mongodb').MongoClient,
   { Pool } = require('pg'),
   { createClient } = require('redis'),
-  db = require('dmdb'),
   oracledb = require('oracledb'),
   { ClickHouse } = require('clickhouse'),
   { Client } = require('ssh2'),
@@ -349,6 +348,8 @@ const DBConnectTest = {
     /* 创建连接池 */
     async function createPool() {
       try {
+        let db = require('dmdb');
+
         return db.createPool({
           connectString: `dm://${dbconfig.user}:${dbconfig.password}@${dbconfig.host}:${dbconfig.port > 0 ? dbconfig.port : 5236}?loginEncrypt=false&autoCommit=false`,
           poolMax: 10,
@@ -715,6 +716,8 @@ const DBExec = {
     /* 创建连接池 */
     async function createPool() {
       try {
+        let db = require('dmdb');
+        
         return db.createPool({
           connectString: `dm://${dbconfig.user}:${dbconfig.password}@${dbconfig.host}:${dbconfig.port > 0 ? dbconfig.port : 5236}?loginEncrypt=false&autoCommit=false`,
           poolMax: 10,
