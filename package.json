@@ -1,6 +1,10 @@
 {
   "name": "database-query",
+<<<<<<< HEAD
   "version": "1.1.0",
+=======
+  "version": "1.1.1",
+>>>>>>> 9a4289bd4600c8250c8cd1e17d915f49c2629669
   "description": "Integration of a variety of formats a library database queries.",
   "main": "index.js",
   "scripts": {
@@ -12,6 +16,7 @@
   },
   "keywords": [
     "mysql",
+    "goldendb",
     "mssql",
     "Sql Server",
     "oracle",
