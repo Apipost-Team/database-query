@@ -19,6 +19,7 @@ const mysql = require('mysql2'),
         "type": "string",
         "enum": [
           "mysql",
+          "goldendb",
           "mssql",
           "oracle",
           "redis",
@@ -126,6 +127,40 @@ const DBConnectTest = {
       reject({
         err: 'error',
         result: `MySQL connection error: ${String(err)}`
+      })
+    }
+  }, // Finished
+  goldendb: function (dbconfig, resolve, reject, sshClient) {
+    try {
+      const connection = mysql.createConnection(_.assign(dbconfig, {
+        port: _.isInteger(dbconfig.port) ? Number(dbconfig.port) : 3306
+      }));
+
+      connection.connect((err) => {
+        if (err) {
+          reject({
+            err: 'error',
+            result: `GoldenDB connection error: ${String(err)}`
+          })
+        } else {
+          resolve({
+            err: 'success',
+            result: 'GoldenDB connection success.'
+          })
+        }
+
+        if (_.isFunction(connection.end)) {
+          try {
+            connection.end();
+          } catch (e) { }
+        }
+        _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
+        return;
+      });
+    } catch (err) {
+      reject({
+        err: 'error',
+        result: `GoldenDB connection error: ${String(err)}`
       })
     }
   }, // Finished
@@ -412,6 +447,45 @@ const DBExec = {
       );
     });
   }, // Finished
+  goldendb: function (dbconfig, query, resolve, reject, sshClient) {
+    const connection = mysql.createConnection(_.assign(dbconfig, {
+      port: _.isInteger(dbconfig.port) ? dbconfig.port : 3306
+    }));
+
+    connection.connect((err) => {
+      if (err) {
+        _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
+        reject({
+          err: 'error',
+          result: `GoldenDB connection error: ${String(err)}`
+        })
+        return;
+      }
+
+      connection.execute(
+        query,
+        function (err, results) {
+          _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
+
+          try {
+            connection.end();
+          } catch (e) { }
+
+          if (err) {
+            reject({
+              err: 'error',
+              result: `GoldenDB execute error: ${String(err)}`
+            })
+          } else {
+            resolve({
+              err: 'success',
+              result: results
+            })
+          }
+        }
+      );
+    });
+  }, // Finished 
   mssql: function (dbconfig, query, resolve, reject, sshClient) {
     _.assign(dbconfig, {
       server: dbconfig.host,
@@ -769,7 +843,7 @@ function DatabaseQuery(option, query) {
       })
     }
 
-    if (!_.isString(query) && ['mysql', 'mssql', 'pg', 'clickhouse', 'oracle', 'mongodb', 'dmdb'].indexOf(option.type) > -1) {
+    if (!_.isString(query) && ['mysql', 'goldendb', 'mssql', 'pg', 'clickhouse', 'oracle', 'mongodb', 'dmdb'].indexOf(option.type) > -1) {
       reject({
         err: 'error',
         result: 'Request parameter query must be a string'
@@ -862,6 +936,11 @@ function DatabaseQuery(option, query) {
                       stream: stream
                     })
                     break;
+                  case 'goldendb':
+                      _.assign(_dbconfig, {
+                        stream: stream
+                      })
+                      break; 
                   case 'mssql':
                     _.assign(_dbconfig, {
                       port: stream.localPort
@@ -987,6 +1066,11 @@ function DatabaseConnectTest(option) {
                       stream: stream
                     })
                     break;
+                  case 'goldendb':
+                      _.assign(_dbconfig, {
+                        stream: stream
+                      })
+                      break; 
                   case 'mssql':
                     _.assign(_dbconfig, {
                       port: stream.localPort
