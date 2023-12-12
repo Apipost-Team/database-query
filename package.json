@@ -1,44 +1,38 @@
 {
-  "name": "database-query",
-  "version": "1.1.3",
-  "description": "Integration of a variety of formats a library database queries.",
+  "name": "apipost-grpc",
+  "version": "2.0.0",
+  "description": "apipost-grpc",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Apipost-Team/database-query.git"
+    "url": "git+https://github.com/Apipost-Team/apipost-grpc.git"
   },
   "keywords": [
-    "mysql",
-    "goldendb",
-    "mssql",
-    "Sql Server",
-    "oracle",
-    "clickhouse",
-    "mongodb",
-    "PostgreSQL",
-    "pg"
+    "grpc",
+    "apipost-grpc",
+    "apipost"
   ],
   "author": "apipost-lab001 <admin@apipost.cn> (https://github.com/Apipost-Team)",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/Apipost-Team/database-query/issues"
+    "url": "https://github.com/Apipost-Team/apipost-grpc/issues"
   },
-  "homepage": "https://github.com/Apipost-Team/database-query#readme",
+  "homepage": "https://github.com/Apipost-Team/apipost-grpc#readme",
   "dependencies": {
-    "mysql2": "^3.6.0",
-    "mssql": "^9.2.0",
-    "oracledb": "^6.0.0",
-    "pg": "^8.11.3",
-    "clickhouse": "^2.6.0",
-    "mongodb": "6.1.0",
-    "dmdb": "^1.0.18856",
-    "ssh2": "^1.14.0",
+    "@grpc/grpc-js": "^1.6.7",
+    "@grpc/proto-loader": "^0.6.13",
+    "apipost-inside-tools": "^0.1.10",
+    "core-js": "^3.9.0",
+    "grpc-caller": "^0.14.0",
+    "filedescriptor2proto": "^0.0.4",
     "json5": "^2.2.1",
     "lodash": "^4.17.21",
-    "redis": "^4.6.8",
-    "tv4": "^1.3.0"
+    "mockjs": "^1.1.0",
+    "protobufjs": "^6.11.3",
+    "grpc-reflection-js": "^0.3.0",
+    "uuid": "^8.3.2"
   }
 }

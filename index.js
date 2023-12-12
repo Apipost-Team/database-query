@@ -1,1108 +1,638 @@
-const mysql = require('mysql2'),
-  mssql = require('mssql'),
-  MongoClient = require('mongodb').MongoClient,
-  { Pool } = require('pg'),
-  { createClient } = require('redis'),
-  oracledb = require('oracledb'),
-  { ClickHouse } = require('clickhouse'),
-  { Client } = require('ssh2'),
-  _ = require('lodash'),
-  tv4 = require('tv4'),
-  fs = require('fs'),
-  JSON5 = require('json5'),
+const grpc = require('@grpc/grpc-js'),
   path = require('path'),
-  schema = {
-    "$schema": "http://json-schema.org/draft-04/schema#",
-    "type": "object",
-    "properties": {
-      "type": {
-        "type": "string",
-        "enum": [
-          "mysql",
-          "goldendb",
-          "mssql",
-          "oracle",
-          "redis",
-          "clickhouse",
-          "dmdb",
-          "mongodb",
-          "pg"
-        ]
-      },
-      "dbconfig": {
-        "type": "object",
-        "properties": {
-          "host": {
-            "type": "string"
-          },
-          "port": {
-            "type": "integer"
-          },
-          "user": {
-            "type": "string"
-          },
-          "password": {
-            "type": "string"
-          },
-          "database": {
-            "type": "string"
-          },
-          "collectionName": {
-            "type": "string"
+  caller = require('grpc-caller'),
+  protobuf = require("protobufjs"),
+  fs = require('fs'),
+  uuid = require('uuid'),
+  Service = require("protobufjs/src/service"),
+  Enum = require("protobufjs/src/enum"),
+  Field = require("protobufjs/src/field"),
+  MapField = require("protobufjs/src/mapfield"),
+  Message = require("protobufjs/src/message"),
+  OneOf = require("protobufjs/src/oneof"),
+  Type = require("protobufjs/src/type"),
+  protoLoader = require('@grpc/proto-loader'),
+  Mock = require('mockjs'),
+  _ = require('lodash'),
+  JSON5 = require('json5'),
+  ASideTools = require('apipost-inside-tools'),
+  convertDescriptorToProto = require('filedescriptor2proto'),
+  os = require('os'),
+  grpc_reflection = require('grpc-reflection-js');
+
+//127.0.0.1:50051
+//59.110.10.84:30005
+
+class GrpcClient {
+  // 构造函数
+  constructor(opts) {
+    if (!opts) {
+      opts = {};
+    }
+
+    // 初始化
+    this.includeDirs = [];
+    this.proto = opts.hasOwnProperty('proto') ? opts.proto : '';
+    this.retry = opts.hasOwnProperty('retry') && _.isNumber(opts.retry) && opts.retry >= 0 ? opts.retry : 1; // fix bug
+    this.ssl = opts.hasOwnProperty('ssl') ? opts.ssl : null;
+    this.tls = opts.hasOwnProperty('tls') ? opts.tls : false;
+
+    // 设置 import 依赖目录
+    // 将当前proto文件所在的目录当作依赖目录之一
+    const that = this;
+
+    this.includeDirs.push(path.dirname(this.proto));
+
+    if (_.isArray(opts.includeDirs)) {
+      _.forEach(opts.includeDirs, function (dirpath) {
+        if (_.isString(dirpath)) {
+          that.includeDirs.push(dirpath);
+        }
+      });
+    }
+
+    if (this.proto != '') {
+      try {
+        this.packageDefinition = protoLoader.loadSync(
+          this.proto,
+          {
+            keepCase: true,
+            longs: String,
+            enums: String,
+            defaults: true,
+            oneofs: true,
+            includeDirs: this.includeDirs
           }
-        },
-        "required": [
-          "host",
-          "user",
-          "password",
-          "database"
-        ]
-      },
-      "ssh": {
-        "type": "object",
-        "properties": {
-          "host": {
-            "type": "string"
-          },
-          "port": {
-            "type": "integer"
-          },
-          "username": {
-            "type": "string"
-          },
-          "password": {
-            "type": "string"
-          },
-          "privateKey": {
-            "type": "string"
-          },
-          "passphrase": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "host",
-          "port",
-          "username"
-        ]
+        );
+      } catch (e) {
+        this.packageDefinition = {}
       }
-    },
-    "required": [
-      "type",
-      "dbconfig",
-      "ssh"
-    ]
+    }
+
+    // root
+    this.root = new protobuf.Root();
+
+    if (this.includeDirs.length > 0) {
+      addIncludePathToRoot(this.root, this.includeDirs);
+    }
   }
 
-// 各种数据库测试连接对象
-const DBConnectTest = {
-  mysql: function (dbconfig, resolve, reject, sshClient) {
-    try {
-      const connection = mysql.createConnection(_.assign(dbconfig, {
-        port: _.isInteger(dbconfig.port) ? Number(dbconfig.port) : 3306
-      }));
-
-      connection.connect((err) => {
-        if (err) {
-          reject({
-            err: 'error',
-            result: `MySQL connection error: ${String(err)}`
-          })
-        } else {
-          resolve({
-            err: 'success',
-            result: 'MySQL connection success.'
-          })
-        }
-
-        if (_.isFunction(connection.end)) {
-          try {
-            connection.end();
-          } catch (e) { }
-        }
-        _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
-        return;
-      });
-    } catch (err) {
-      reject({
-        err: 'error',
-        result: `MySQL connection error: ${String(err)}`
-      })
+  /**
+   * 发送
+   */
+  request(service, method, target, callback) {
+    if (!_.isFunction(callback)) {
+      callback = function () { }
     }
-  }, // Finished
-  goldendb: function (dbconfig, resolve, reject, sshClient) {
-    try {
-      const connection = mysql.createConnection(_.assign(dbconfig, {
-        port: _.isInteger(dbconfig.port) ? Number(dbconfig.port) : 3306
-      }));
 
-      connection.connect((err) => {
-        if (err) {
-          reject({
-            err: 'error',
-            result: `GoldenDB connection error: ${String(err)}`
-          })
-        } else {
-          resolve({
-            err: 'success',
-            result: 'GoldenDB connection success.'
-          })
-        }
+    const _grpc = this, _tls = this.tls;
+    let _requestService = '';
 
-        if (_.isFunction(connection.end)) {
-          try {
-            connection.end();
-          } catch (e) { }
+    // get Service
+    const serverList = this.serverList();
+
+    if (_.isArray(serverList) && !_.isEmpty(serverList)) {
+      this.serverList().forEach(item => {
+        if (_.isObject(item) && service == item.service) {
+          _requestService = item.short;
         }
-        _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
-        return;
-      });
-    } catch (err) {
-      reject({
-        err: 'error',
-        result: `GoldenDB connection error: ${String(err)}`
       })
+    } else {
+      _requestService = String(service).substr(String(service).lastIndexOf(".") + 1);
     }
-  }, // Finished
-  mssql: async function (dbconfig, resolve, reject, sshClient) {
-    _.assign(dbconfig, {
-      server: dbconfig.host,
-      port: _.isInteger(dbconfig.port) ? dbconfig.port : 1433,
-      options: {
-        encrypt: true,
-        trustServerCertificate: true,
-        cryptoCredentialsDetails: {},
-        connectTimeout: dbconfig.timeout,
-        requestTimeout: dbconfig.timeout
+
+    // 请求 meta
+    const meta = {};
+    _.forEach(_.get(target, `request.header`), (item) => {
+      if (item.is_checked > 0 && !_.isEmpty(_.trim(item.key))) {
+        meta[_.trim(item.key)] = _.trim(item.value)
       }
     });
 
+    // 请求body
+    let body = {};
     try {
-      await mssql.connect(dbconfig);
-      resolve({
-        err: 'success',
-        result: 'Mssql connection success.'
-      })
-      mssql.close();
-    } catch (err) {
-      reject({
-        err: 'error',
-        result: `Mssql connection error: ${String(err)}`
-      })
-    } finally {
-      _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
+      body = JSON5.parse(String(_.get(target, `request.body.raw`)))
+    } catch (e) { }
+
+    // 请求 credentials
+    let credentials = null;
+
+    if (_.isObject(_grpc.ssl)) {
+      credentials = grpc.credentials.createSsl(
+        fs.readFileSync(_grpc.ssl.ca),
+        fs.readFileSync(_grpc.ssl.key),
+        fs.readFileSync(_grpc.ssl.cert)
+      );
+    } else {
+      if (_tls > 0) {
+        credentials = grpc.credentials.createSsl(); // fix bug
+      }
     }
-  }, // Finished
-  pg: async function (dbconfig, resolve, reject, sshClient) {  // PostgreSQL
-    // 创建 PostgreSQL 连接池配置
-    const pool = new Pool(_.assign(dbconfig, {
-      port: _.isInteger(dbconfig.port) ? dbconfig.port : 5432
-    }));
 
-    try {
-      const client = await pool.connect();
-      resolve({
-        err: 'success',
-        result: 'PostgreSQL connection success.'
-      })
-      client.release();
-    } catch (error) {
-      reject({
-        err: 'error',
-        result: `PostgreSQL connection error: ${String(err)}`
-      })
-    } finally {
-      _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
-      pool.end();
-    }
-  }, // Finished
-  clickhouse: function (dbconfig, resolve, reject, sshClient) {
-    const clickhouse = new ClickHouse({
-      url: dbconfig.host,
-      port: dbconfig.port > 0 ? dbconfig.port : 8123,
-      debug: false,
-      basicAuth: {
-        username: dbconfig.user,
-        password: dbconfig.password
-      },
-      isUseGzip: false,
-      trimQuery: false,
-      usePost: false,
-      format: "json", // "json" || "csv" || "tsv"
-      raw: false,
-      config: {
-        database: dbconfig.database ? dbconfig.database : "default",
+    // 请求开始时间
+    const starttime = Date.now();
+
+    // 开始请求
+    const client = caller(_.get(target, `url`), {
+      file: this.proto,
+      load: {
+        keepCase: true,
+        longs: String,
+        enums: String,
+        defaults: true,
+        oneofs: true,
+        includeDirs: this.includeDirs
       }
-    });
-    clickhouse.query('SELECT 1').exec((err, rows) => {
-      _.isFunction(clickhouse.close) && clickhouse.close();
-      _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
+    }, _requestService, credentials);
 
-      if (err) {
-        reject({
-          err: 'error',
-          result: `ClickHouse connection error: ${String(err)}`
-        })
-      } else {
-        resolve({
-          err: 'success',
-          result: 'ClickHouse connection success.'
-        })
-      }
-    });
-  }, // Finished
-  oracle: function (dbconfig, resolve, reject, sshClient) {
-    try {
-      dbconfig.port = _.isInteger(dbconfig.port) ? dbconfig.port : 1521;
-
-      let libOpt = {};
-      switch (process.platform) {
-        case 'win32':
-          libOpt = { oracleClientMode: oracledb.ORACLE_CLIENT_THIN }
-          break;
-        case 'darwin':
-          libOpt = { libDir: '/usr/local/lib', oracleClientMode: oracledb.ORACLE_CLIENT_THIN }
-        case 'linux':
-          libOpt = { libDir: '/usr/local/lib', oracleClientMode: oracledb.ORACLE_CLIENT_THIN }
-          break;
-      }
-
-      oracledb.initOracleClient(libOpt); // 设置 Oracle Instant Client 的路径
-
-      oracledb.getConnection(_.assign({
-        user: dbconfig.user,
-        password: dbconfig.password,
-        connectString: `${dbconfig.host}:${dbconfig.port}/${dbconfig.database ? dbconfig.database : dbconfig.server}`,
-        driver: 'thin',
-        sslVerifyCertificate: false
-      }), (err, connection) => {
-        if (err) {
-          _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
-          reject({
-            err: 'error',
-            result: `Oracle connect error: ${String(err)}`
-          })
-        } else {
-          resolve({
-            err: 'success',
-            result: 'Oracle connect success.'
-          })
-
-          // 释放连接
-          connection.close((err) => {
-            if (err) {
-              reject({
-                err: 'error',
-                result: `Oracle close error: ${String(err)}`
-              })
+    if (!_.isFunction(client[method?.name])) {
+      callback(`Error: Service ${service} does NOT have a method named ${method?.name}.`, null)
+    } else {
+      if (method?.requestStream == -1 && method?.responseStream == -1) { // 一元调用
+        client.Request(method?.name, body)
+          .withMetadata(headers)
+          .withResponseMetadata(true)
+          .withResponseStatus(true)
+          .withRetry(_grpc.retry)
+          .exec(function (error, response) {
+            let res = {
+              "result": "",
+              "metadata": [],
+              "status": {
+                "code": 0,
+                "responseTime": (Date.now() - starttime),
+                "details": "OK"
+              }
             }
-          });
 
-          _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
-        }
-      })
-    } catch (err) {
-      reject({
-        err: 'error',
-        result: `Oracle connect error: ${String(err).split("\n")[0]}`
-      })
-      _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
-    }
-  }, // to test todo
-  mongodb: function (dbconfig, resolve, reject, sshClient) {
-    MongoClient.connect(`mongodb://${dbconfig.user}:${dbconfig.password}@${dbconfig.host}:${dbconfig.port > 0 ? dbconfig.port : 27017}/${dbconfig.auth_source ? dbconfig.auth_source : dbconfig.database}`).then((client) => {
-
-      resolve({
-        err: 'success',
-        result: `MongoDB connect success.`
-      })
-
-      _.isFunction(client.close) && client.close();
-    }).catch((err) => {
-      reject({
-        err: 'error',
-        result: `MongoDB connect error: ${String(err)}`
-      })
-    }).finally(() => {
-
-      _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
-    });
-  }, // 目前仅支持 findOne 的操作，Finished to select method
-  redis: async function (dbconfig, resolve, reject, sshClient) {
-    const client = createClient({
-      url: `redis://${dbconfig.user}:${dbconfig.password}@${dbconfig.host}:${dbconfig.port > 0 ? dbconfig.port : 6380}/${dbconfig.database ? dbconfig.database : 1}`
-    });
-
-    try {
-      await client.connect();
-      resolve({
-        err: 'success',
-        result: `Redis connect success.`
-      })
-    } catch (err) {
-      reject({
-        err: 'error',
-        result: `Redis connect error:  ${String(err)}`
-      })
-    }
-
-    if (_.isFunction(client.disconnect)) {
-      await client.disconnect();
-    }
-
-    _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
-  }, // Finished
-  dmdb: async function (dbconfig, resolve, reject, sshClient) {
-    let pool, conn;
-    try {
-      pool = await createPool();
-      conn = await getConnection();
-      resolve({
-        err: 'success',
-        result: 'Dmdb connect success.'
-      })
-    } catch (err) {
-      reject({
-        err: 'error',
-        result: `Dmdb connect error: ${String(err)}`
-      })
-    } finally {
-      try {
-        await conn.close();
-        await pool.close();
-      } catch (err) {
-        reject({
-          err: 'error',
-          result: `Dmdb close error: ${String(err)}`
-        })
-      }
-    }
-
-    _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
-
-    /* 创建连接池 */
-    async function createPool() {
-      try {
-        let db = require('dmdb');
-
-        return db.createPool({
-          connectString: `dm://${dbconfig.user}:${dbconfig.password}@${dbconfig.host}:${dbconfig.port > 0 ? dbconfig.port : 5236}?loginEncrypt=false&autoCommit=false`,
-          poolMax: 10,
-          poolMin: 1
-        });
-      } catch (err) {
-        throw new Error("createPool error: " + err.message);
-      }
-    }
-
-    /* 获取数据库连接 */
-    async function getConnection() {
-      try {
-        return pool.getConnection();
-      } catch (err) {
-        throw new Error("getConnection error: " + err.message);
-      }
-    }
-  } // Finished
-}
-
-// 各种数据库实际读取对象
-const DBExec = {
-  mysql: function (dbconfig, query, resolve, reject, sshClient) {
-    const connection = mysql.createConnection(_.assign(dbconfig, {
-      port: _.isInteger(dbconfig.port) ? dbconfig.port : 3306
-    }));
-
-    connection.connect((err) => {
-      if (err) {
-        _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
-        reject({
-          err: 'error',
-          result: `MySQL connection error: ${String(err)}`
-        })
-        return;
-      }
-
-      connection.execute(
-        query,
-        function (err, results) {
-          _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
-
-          try {
-            connection.end();
-          } catch (e) { }
-
-          if (err) {
-            reject({
-              err: 'error',
-              result: `MySQL execute error: ${String(err)}`
-            })
-          } else {
-            resolve({
-              err: 'success',
-              result: results
-            })
-          }
-        }
-      );
-    });
-  }, // Finished
-  goldendb: function (dbconfig, query, resolve, reject, sshClient) {
-    const connection = mysql.createConnection(_.assign(dbconfig, {
-      port: _.isInteger(dbconfig.port) ? dbconfig.port : 3306
-    }));
-
-    connection.connect((err) => {
-      if (err) {
-        _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
-        reject({
-          err: 'error',
-          result: `GoldenDB connection error: ${String(err)}`
-        })
-        return;
-      }
-
-      connection.execute(
-        query,
-        function (err, results) {
-          _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
-
-          try {
-            connection.end();
-          } catch (e) { }
-
-          if (err) {
-            reject({
-              err: 'error',
-              result: `GoldenDB execute error: ${String(err)}`
-            })
-          } else {
-            resolve({
-              err: 'success',
-              result: results
-            })
-          }
-        }
-      );
-    });
-  }, // Finished 
-  mssql: function (dbconfig, query, resolve, reject, sshClient) {
-    _.assign(dbconfig, {
-      server: dbconfig.host,
-      port: _.isInteger(dbconfig.port) ? dbconfig.port : 1433,
-      options: {
-        encrypt: true,
-        trustServerCertificate: true,
-        cryptoCredentialsDetails: {},
-        connectTimeout: dbconfig.timeout,
-        requestTimeout: dbconfig.timeout
-      }
-    });
-
-    mssql.on('error', err => {
-      _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
-      reject({
-        err: 'error',
-        result: `Mssql connection error: ${String(err)}`
-      })
-    })
-
-    mssql.connect(dbconfig).then(pool => {
-      return pool.request()
-        .query(query)
-    }).then(results => {
-      resolve({
-        err: 'success',
-        result: _.isArray(results.recordset) ? results.recordset : []
-      })
-    }).catch(err => {
-      reject({
-        err: 'error',
-        result: `Mssql execute error: ${String(err)}`
-      })
-    }).finally(function () {
-      mssql.close();
-      _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
-    });
-  }, // Finished
-  pg: function (dbconfig, query, resolve, reject, sshClient) {  // PostgreSQL
-    // 创建 PostgreSQL 连接池配置
-    const pool = new Pool(_.assign(dbconfig, {
-      port: _.isInteger(dbconfig.port) ? dbconfig.port : 5432
-    }));
-    pool.query({
-      text: query,
-      timeout: dbconfig.timeout
-    })
-      .then(result => {
-        resolve({
-          err: 'success',
-          result: _.isArray(result.rows) ? result.rows : []
-        })
-      })
-      .catch(err => {
-        reject({
-          err: 'error',
-          result: `PostgreSQL query error: ${String(err)}`
-        })
-      }).finally(() => {
-        pool.end();
-        _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
-      });
-  }, // Finished
-  clickhouse: function (dbconfig, query, resolve, reject, sshClient) {
-    const clickhouse = new ClickHouse({
-      url: dbconfig.host,
-      port: dbconfig.port > 0 ? dbconfig.port : 8123,
-      debug: false,
-      basicAuth: {
-        username: dbconfig.user,
-        password: dbconfig.password
-      },
-      isUseGzip: false,
-      trimQuery: false,
-      usePost: false,
-      format: "json", // "json" || "csv" || "tsv"
-      raw: false,
-      config: {
-        database: dbconfig.database ? dbconfig.database : "default",
-      }
-    });
-
-    clickhouse.query(query).exec(function (err, rows) {
-      _.isFunction(clickhouse.close) && clickhouse.close();
-      _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
-
-      if (err) {
-        reject({
-          err: 'error',
-          result: `Clickhouse query error: ${String(err)}`
-        })
-      } else {
-        resolve({
-          err: 'success',
-          result: rows ? rows : []
-        })
-      }
-    });
-  }, // Finished
-  oracle: function (dbconfig, query, resolve, reject, sshClient) {
-    try {
-      dbconfig.port = _.isInteger(dbconfig.port) ? dbconfig.port : 1521;
-
-      let libOpt = {};
-      switch (process.platform) {
-        case 'win32':
-          libOpt = { oracleClientMode: oracledb.ORACLE_CLIENT_THIN }
-          break;
-        case 'darwin':
-          libOpt = { libDir: '/usr/local/lib', oracleClientMode: oracledb.ORACLE_CLIENT_THIN }
-        case 'linux':
-          libOpt = { libDir: '/usr/local/lib', oracleClientMode: oracledb.ORACLE_CLIENT_THIN }
-          break;
-      }
-
-      oracledb.initOracleClient(libOpt); // 设置 Oracle Instant Client 的路径
-
-      oracledb.getConnection(_.assign({
-        user: dbconfig.user,
-        password: dbconfig.password,
-        connectString: `${dbconfig.host}:${dbconfig.port}/${dbconfig.database ? dbconfig.database : dbconfig.server}`,
-        sslVerifyCertificate: false
-      }), (err, connection) => {
-        if (err) {
-          _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
-          reject({
-            err: 'error',
-            result: `Oracle connect error: ${String(err)}`
-          })
-        } else {
-          connection.execute(query, (err, results) => {
-            if (err) {
-              reject({
-                err: 'error',
-                result: `Oracle execute error: ${String(err)}`
-              })
+            if (_.isObject(response)) {
+              let metadatas = [];
+              _.forEach(_.get(response, `metadata.internalRepr`), function (values, key) {
+                if (values instanceof Array) {
+                  values.forEach(item => {
+                    metadatas.push({
+                      key: key,
+                      value: item
+                    });
+                  })
+                }
+              });
+              res.result = response.response
+              res.metadata = metadatas;
+              res.status.code = response.status.code;
+              res.status.details = response.status.details;
+              callback(null, res, null, `unary`)
             } else {
-              resolve({
-                err: 'success',
-                result: results
-              })
+              callback(String(error), null, null, `unary`)
             }
-          });
+          })
+      } else {
+        const callStream = client[method?.name](body, meta)
 
-          // 释放连接
-          connection.close((err) => {
-            if (err) {
-              reject({
-                err: 'error',
-                result: `Oracle close error: ${String(err)}`
-              })
-            }
-          });
-
-          _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
+        if (method?.requestStream == -1 && method?.responseStream == 1) { // 服务端流式调用
+          callback(null, null, callStream, `server_stream`)
+        } else if (method?.requestStream == 1 && method?.responseStream == -1) { // 客户端流式调用
+          callback(null, null, callStream, `client_stream`)
+        } else if (method?.requestStream == 1 && method?.responseStream == 1) { // 双向流
+          callback(null, null, callStream, `bidi_stream`)
         }
-      })
-    } catch (err) {
-      reject({
-        err: 'error',
-        result: `Oracle connect error: ${String(err).split("\n")[0]}`
-      })
-      _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
+      }
     }
-  }, // to test todo
-  mongodb: function (dbconfig, query, resolve, reject, sshClient) {
-    if (!_.isString(_.get(query, 'collectionName'))) {
-      reject({
-        err: 'error',
-        result: `Incorrect collectionName name`
-      });
-      _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
-    } else {
-      let _collectionName = _.get(query, 'collectionName');
-      let _method = _.get(query, 'method');
-      let _data = _.get(query, 'data');
+  }
 
-      MongoClient.connect(`mongodb://${dbconfig.user}:${dbconfig.password}@${dbconfig.host}:${dbconfig.port > 0 ? dbconfig.port : 27017}/${dbconfig.auth_source ? dbconfig.auth_source : dbconfig.database}`).then((client) => {
-        const collection = client.db(dbconfig.database).collection(_collectionName);
+  /**
+     * 通过proto文件获取服务列表
+     */
+  serverList() {
+    const services = [];
+    try {
+      const root = this.root.loadSync(this.proto, { keepCase: true });
+      recursiveGetServer(root, services);
+    } catch (e) { }
+    return services;
+  }
 
-        if (_.isFunction(collection[_method])) {
-          // 查询文档
-          try {
-            let _para_data = {};
+  /**
+   *  通过proto文件，获取指定的service 方法列表
+   * @param service
+   * @returns {Array}
+   */
+  methodList(service) {
+    const methods = {
+      'service': service.substr(service.indexOf('.') + 1),
+      'method': []
+    };
+    return new Promise((resove, reject) => {
+      try {
+        const listMethods = this.packageDefinition[service];
+        const root = this.root.loadSync(this.proto, { keepCase: true });
 
-            if (_.isString(_data)) {
-              try {
-                _para_data = JSON5.parse(_data);
-              } catch (e) { }
-            } else if (_.isObject(_data)) {
-              _para_data = _data;
-            }
+        Object.keys(listMethods).forEach(method => {
+          let fields = '{}';
 
-            collection[_method](_para_data).then((results) => {
-              resolve({
-                err: 'success',
-                result: [JSON5.parse(JSON5.stringify(results))]
-              })
-            }).catch((err) => {
-              reject({
-                err: 'error',
-                result: `MongoDB query error: ${String(err)}`
-              })
-            });
-          } catch (e) {
-            reject({
-              err: 'error',
-              result: `MongoDB query error: ${String(e)}`
-            })
+          if (_.isObject(listMethods[method].requestType) && _.isObject(listMethods[method].requestType.type) && typeof listMethods[method].requestType.type.name === 'string') {
+            fields = root.lookup(listMethods[method].requestType.type.name).fields
           }
+
+          methods.method.push({
+            name: method,
+            requestStream: _.get(root.lookup(method), `requestStream`) ? 1 : -1,
+            responseStream: _.get(root.lookup(method), `responseStream`) ? 1 : -1,
+            requestBody: mockData(fields)
+          })
+        })
+      } catch (e) {
+        reject(String(e))
+      }
+
+      resove(methods);
+    })
+  }
+
+  /**
+   * 通过proto文件获取全部方法列表
+   */
+  allMethodList() {
+    const methods = {};
+    return new Promise((resove, reject) => {
+      try {
+        const root = this.root.loadSync(this.proto, { keepCase: true });
+
+        this.serverList().forEach(item => {
+          methods[item.service] = {
+            'service': item.short,
+            'method': []
+          };
+          const listMethods = this.packageDefinition[item.service];
+
+          Object.keys(listMethods).forEach(method => {
+            let fields = '{}';
+
+            if (_.isObject(listMethods[method].requestType) && _.isObject(listMethods[method].requestType.type) && typeof listMethods[method].requestType.type.name === 'string') {
+              fields = root.lookup(listMethods[method].requestType.type.name).fields
+
+            }
+
+            methods[item.service].method.push({
+              name: method,
+              requestStream: _.get(root.lookup(method), `requestStream`) ? 1 : -1,
+              responseStream: _.get(root.lookup(method), `responseStream`) ? 1 : -1,
+              requestBody: mockData(fields)
+            })
+          })
+        })
+      } catch (e) {
+        reject(String(e))
+      }
+
+      resove(methods);
+    })
+  }
+
+  /**
+     * 通过反射获取全部方法列表
+     */
+  //   使用示例：
+  //   allMethodListByReflection(`127.0.0.1:50051`,uuid.v4()).then((res) => {
+  // 		console.log(JSON.stringify(res, null, "\t"))
+  // 	}).catch((e)=>{
+  // 		console.log(String(e))
+  // 	})
+  allMethodListByReflection(host, target_id = ``) {
+    const allMethods = {};
+    const reflection = new grpc_reflection.Client(host, grpc.credentials.createInsecure());
+
+
+    return new Promise((resove, reject) => {
+      try {
+        reflection.listServices().then(async (services) => {
+          const fs = require('fs'), uuid = require('uuid'), crypto = require('crypto'), path = require('path'), os = require('os'), tempDir = os.tmpdir();
+          const protos = {
+            includeDirs: [],
+            includeFiles: [],
+            protoContent: ``,
+            protoPath: ``
+          };
+
+          target_id = String(target_id);
+
+          if (_.isEmpty(target_id)) {
+            target_id = uuid.v4();
+          }
+
+          for (let service of services) {
+            const serviceInfo = await reflection.fileContainingSymbol(service);
+            const dependency = [];
+            _.forEach(Array.from(reflection?.fileDescriptorCache), function (item, key) {
+              if (_.isArray(item[1]?.dependency)) {
+                _.assign(dependency, item[1]?.dependency)
+              }
+
+              if (_.isObject(item[1]) && !_.isEmpty(item[1])) {
+                const includeDirs = path.resolve(tempDir, `protos`, `${target_id}`, path.dirname(String(item[0])));
+                const includeFiles = path.resolve(includeDirs, String(path.basename(item[0])));
+
+                const protoContent = convertDescriptorToProto(JSON.parse(JSON.stringify(item[1])));
+
+                try {
+                  fs.mkdirSync(path.dirname(includeFiles), { recursive: true });
+                  fs.writeFileSync(includeFiles, protoContent, 'utf8');
+
+                  protos.includeDirs = _.union(protos.includeDirs, [includeDirs])
+                  protos.includeFiles = _.union(protos.includeFiles, [{
+                    name: path.basename(includeFiles),
+                    path: includeFiles,
+                    proto: protoContent,
+                    relativePath: String(includeFiles).substring(String(tempDir).length + 1)
+                  }])
+                } catch (err) {
+                  reject(err)
+                }
+              }
+            });
+
+
+            allMethods[service] = {
+              service: service.substr(service.indexOf('.') + 1),
+              method: []
+            };
+
+            _.forEach(_.get(serviceInfo.lookup(service), 'methods'), function (item, method) {
+              allMethods[service].method.push({
+                name: method,
+                requestStream: serviceInfo.lookup(method)?.requestStream ? 1 : -1,
+                responseStream: serviceInfo.lookup(method)?.responseStream ? 1 : -1,
+                requestBody: mockData(serviceInfo.lookup(serviceInfo.lookup(method)?.requestType).fields)
+              })
+            });
+
+            const mainProto = _.find(protos?.includeFiles, function (item) {
+              const depProto = _.find(dependency, function (dep) {
+                return _.endsWith(item?.relativePath, dep);
+              });
+
+              return !_.endsWith(item?.relativePath, depProto);
+            });
+
+            _.set(protos, `protoPath`, mainProto?.path)
+            _.set(protos, `protoContent`, mainProto?.proto)
+          };
+          _.assign(allMethods, { protos })
+
+          resove(allMethods)
+        }).catch((e) => {
+          reject(e)
+        })
+      } catch (e) {
+        reject(e)
+      }
+    })
+  }
+
+  /**
+     * 通过反射获取指定的service method 的mock数据
+     * @param service
+     * @returns {Array}
+     */
+  //   使用示例：
+  //   mockMethodRequestByReflection(`127.0.0.1:50051`,`demo.MessageService`,`SayHelloStream`).then((res) => {
+  // 		console.log(JSON.stringify(res, null, "\t"))
+  // 	}).catch((e)=>{
+  // 		console.log(String(e))
+  // 	})
+  mockMethodRequestByReflection(host, service, method) {
+    const reflection = new grpc_reflection.Client(host, grpc.credentials.createInsecure());
+    return new Promise(async (resove, reject) => {
+      try {
+        const serviceInfo = await reflection.fileContainingSymbol(service);
+        resove(mockData(serviceInfo.lookup(serviceInfo.lookup(method)?.requestType).fields))
+      } catch (e) {
+        reject(String(e))
+      }
+    })
+  }
+
+  /**
+   *  通过proto文件,获取指定的service method 的mock数据
+   * @param service
+   * @returns {Array}
+   */
+  mockMethodRequest(service, method) {
+    return new Promise((resove, reject) => {
+      try {
+        let listMethods = this.packageDefinition[service];
+        let root = this.root.loadSync(this.proto, { keepCase: true });
+
+        let fields = '{}';
+
+        if (_.isObject(listMethods) && _.isObject(listMethods[method]) && _.isObject(listMethods[method].requestType) && _.isObject(listMethods[method].requestType.type) && typeof listMethods[method].requestType.type.name === 'string') {
+          fields = root.lookup(listMethods[method].requestType.type.name).fields
+        }
+
+        resove(mockData(fields));
+      } catch (e) {
+        reject(String(e))
+      }
+    })
+
+  }
+}
+
+
+//	内部函数，根据字段生成mock对象
+function mockData(obj) {
+  obj = _.cloneDeep(obj);
+  const MAX_STACK_SIZE = 3;
+
+  function mockTypeFields(type, stackDepth = {}) {
+    if (stackDepth[type.name] > MAX_STACK_SIZE) {
+      return {};
+    }
+    if (!stackDepth[type.name]) {
+      stackDepth[type.name] = 0;
+    }
+
+    stackDepth[type.name]++;
+
+    const fieldsData = {};
+
+    return type.fieldsArray.reduce((data, field) => {
+      field.resolve();
+
+      if (field.parent !== field.resolvedType) {
+        if (field.repeated) {
+          data[field.name] = [mockField(field, stackDepth)];
         } else {
-          reject({
-            err: 'error',
-            result: `MongoDB connect error: ${_method} is not supported.`
-          })
+          data[field.name] = mockField(field, stackDepth);
         }
+      }
 
-        _.isFunction(client.close) && client.close();
-      }).catch((err) => {
-        reject({
-          err: 'error',
-          result: `MongoDB connect error: ${String(err)}`
-        })
-      }).finally(() => {
-        _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
-      });
-    }
-  }, // todo
-  redis: async function (dbconfig, query, resolve, reject, sshClient) {
-    const client = createClient({
-      url: `redis://${dbconfig.user}:${dbconfig.password}@${dbconfig.host}:${dbconfig.port > 0 ? dbconfig.port : 6380}/${dbconfig.database ? dbconfig.database : 1}`
-    });
+      return data;
+    }, fieldsData);
+  }
 
+  function mockEnum(enumType) {
+    const enumKey = Object.keys(enumType.values)[_.random(0, Object.keys(enumType.values).length - 1)];
+    return enumType.values[enumKey];
+  }
+
+  function mockField(field, stackDepth = {}) {
     try {
-      await client.connect();
+      field.resolve();
+    } catch (e) { }
 
-      let data = [];
+    if (field instanceof MapField) {
+      let mockPropertyValue = null;
 
-      if (_.isString(query?.data)) {
+      if (field.resolvedType === null) {
+        mockPropertyValue = mockScalar(field.type, field.name);
+      }
+
+      if (mockPropertyValue === null) {
         try {
-          data = JSON5.parse(query?.data);
+          const resolvedType = field.resolvedType;
+
+          if (resolvedType instanceof Type) {
+            if (resolvedType.oneofs) {
+              mockPropertyValue = pickOneOf(resolvedType.oneofsArray);
+            } else {
+              mockPropertyValue = mockTypeFields(resolvedType);
+            }
+          } else if (resolvedType instanceof Enum) {
+            mockPropertyValue = mockEnum(resolvedType);
+          } else if (resolvedType === null) {
+            mockPropertyValue = {};
+          }
         } catch (e) { }
-      } else if (_.isObject(query?.data)) {
-        data = query?.data;
       }
 
-      if (_.isFunction(client[query?.method])) {
-        const results = await client[query?.method](..._.values(data));
-        resolve({
-          err: 'success',
-          result: results
-        })
-      } else {
-        reject({
-          err: 'error',
-          result: `Redis query error ${query?.method} is not supported.`
-        })
-      }
-    } catch (err) {
-      reject({
-        err: 'error',
-        result: `Redis ${String(err)}`
-      })
+      return {
+        [mockScalar(field.keyType, field.name)]: mockPropertyValue,
+      };
     }
 
-    if (_.isFunction(client.disconnect)) {
-      await client.disconnect();
+    if (field.resolvedType instanceof Type) {
+      return mockTypeFields(field.resolvedType, stackDepth);
     }
 
-    _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
-  }, // Finished
-  dmdb: async function (dbconfig, query, resolve, reject, sshClient) {
-    let pool, conn;
-    try {
-      pool = await createPool();
-      conn = await getConnection();
-      let results = await queryWithResultSet(query);
-      resolve({
-        err: 'success',
-        result: results
-      })
-    } catch (err) {
-      reject({
-        err: 'error',
-        result: `Dmdb ${String(err)}`
-      })
-    } finally {
-      try {
-        await conn.close();
-        await pool.close();
-      } catch (err) {
-        reject({
-          err: 'error',
-          result: `Dmdb ${String(err)}`
-        })
-      }
+    if (field.resolvedType instanceof Enum) {
+      return mockEnum(field.resolvedType);
     }
 
-    _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
+    const mockPropertyValue = mockScalar(field.type, field.name);
 
-    /* 创建连接池 */
-    async function createPool() {
-      try {
-        let db = require('dmdb');
-        
-        return db.createPool({
-          connectString: `dm://${dbconfig.user}:${dbconfig.password}@${dbconfig.host}:${dbconfig.port > 0 ? dbconfig.port : 5236}?loginEncrypt=false&autoCommit=false`,
-          poolMax: 10,
-          poolMin: 1
-        });
-      } catch (err) {
-        throw new Error("createPool error: " + err.message);
-      }
-    }
-    /* 获取数据库连接 */
-    async function getConnection() {
-      try {
-        return pool.getConnection();
-      } catch (err) {
-        throw new Error("getConnection error: " + err.message);
-      }
-    }
-    /* 查询产品信息表 */
-    async function queryWithResultSet(sql) {
-      try {
-        var result = await conn.execute(sql, [], { resultSet: true });
-        var resultSet = result.resultSet;
-        // 从结果集中获取一行
-        let results = [];
-        result = await resultSet.getRow();
-        while (result) {
-          results.push(result);
-          result = await resultSet.getRow();
-        }
-
-        return results;
-      } catch (err) {
-        throw new Error("queryWithResultSet error: " + err.message);
-      }
-    }
-  } // Finished
-}
-
-// 连接数据库并执行SQL等
-function DatabaseQuery(option, query) {
-  // 校验参数
-  let tv4res = tv4.validateResult(option, schema);
-
-  return new Promise(async (resolve, reject) => {
-    if (!tv4res?.valid) {
-      reject({
-        err: 'error',
-        result: tv4res?.error?.message
-      })
-    }
-
-    if (!_.isString(query) && ['mysql', 'goldendb', 'mssql', 'pg', 'clickhouse', 'oracle', 'mongodb', 'dmdb'].indexOf(option.type) > -1) {
-      reject({
-        err: 'error',
-        result: 'Request parameter query must be a string'
-      })
-    }
-
-    if (!_.isObject(query) && ['redis'].indexOf(option.type) > -1) {
-      reject({
-        err: 'error',
-        result: 'Request parameter query must be a Object'
-      })
-    }
-
-    // ssh 配置项
-    let sshConfig = {};
-
-    if (option.ssh.enable > 0) {
-      const ssh = option.ssh;
-      try {
-        switch (Number(ssh.enable)) {
-          case 2: // 公钥
-            _.assign(sshConfig, {
-              host: ssh.host,
-              port: ssh.port ? ssh.port : 22,
-              username: ssh.username,
-              privateKey: fs.readFileSync(ssh.privateKey)
-            });
-            break;
-          case 3: // 公钥+密码
-            _.assign(sshConfig, {
-              host: ssh.host,
-              port: ssh.port ? ssh.port : 22,
-              username: ssh.username,
-              privateKey: fs.readFileSync(ssh.privateKey),
-              passphrase: ssh.passphrase
-            });
-            break;
-          default: // 密码
-            _.assign(sshConfig, {
-              host: ssh.host,
-              port: ssh.port ? ssh.port : 22,
-              username: ssh.username,
-              password: ssh.password
-            });
-            break;
-        }
-      } catch (e) {
-        reject({
-          err: 'error',
-          result: `SSH Config error: ${String(e)}`
-        })
-      }
-    }
-
-    if (!_.isFunction(DBExec[option.type])) {
-      reject({
-        err: 'error',
-        result: `Unsupported ${option.type} database operations.`
-      })
+    if (mockPropertyValue === null) {
+      const resolvedField = field.resolve();
+      return mockField(resolvedField, stackDepth);
     } else {
-      const _dbconfig = _.cloneDeep(option.dbconfig, {
-        port: Number(option.dbconfig.port),
-        timeout: Number(option.dbconfig.timeout) >= 0 ? Number(option.dbconfig.timeout) : 10000
-      });
-
-      const _DBExec = await DBExec[option.type];
-
-      if (option.ssh.enable > 0) {
-        const sshClient = new Client();
-
-        sshClient.on('ready', () => {
-          sshClient.forwardOut(
-            '127.0.0.1',
-            0,
-            option.dbconfig.host,
-            option.dbconfig.port,
-
-            (err, stream) => {
-              if (err) {
-                reject({
-                  err: 'error',
-                  result: `SSH forwardOut error: ${String(err)}`
-                })
-                return sshClient.end();
-              } else {
-
-                switch (option.type) {
-                  case 'mysql':
-                    _.assign(_dbconfig, {
-                      stream: stream
-                    })
-                    break;
-                  case 'goldendb':
-                      _.assign(_dbconfig, {
-                        stream: stream
-                      })
-                      break; 
-                  case 'mssql':
-                    _.assign(_dbconfig, {
-                      port: stream.localPort
-                    })
-                    break;
-                  case 'redis':
-                    _.assign(_dbconfig, {
-                      socket: stream
-                    })
-                    break;
-                }
-
-                _DBExec(_dbconfig, query, resolve, reject, sshClient);
-              }
-            }
-          );
-        });
-
-        sshClient.on('error', (err) => {
-          reject({
-            err: 'error',
-            result: `SSH Client connect error: ${String(err)}`
-          })
-        });
-
-        sshClient.connect(sshConfig);
-      } else {
-        _DBExec(_dbconfig, query, resolve, reject);
-      }
+      return mockPropertyValue;
     }
-  })
-}
+  }
 
-// 检查数据库连接
-function DatabaseConnectTest(option) {
-  // 校验参数
-  let tv4res = tv4.validateResult(option, schema);
+  function pickOneOf(oneofs) {
+    return oneofs.reduce((fields, oneOf) => {
+      fields[oneOf.name] = mockField(oneOf.fieldsArray[0]);
+      return fields;
+    }, {});
+  }
 
-  return new Promise(async (resolve, reject) => {
-    if (!tv4res?.valid) {
-      reject({
-        err: 'error',
-        result: tv4res?.error?.message
-      })
+  function mockScalar(type, fieldName) {
+    switch (type) {
+      case 'string':
+        return interpretMockViaFieldName(fieldName);
+      case 'bool':
+        return true;
+      case 'number':
+      case 'int32':
+      case 'int64':
+      case 'uint32':
+      case 'uint64':
+      case 'sint32':
+      case 'sint64':
+      case 'fixed32':
+      case 'fixed64':
+      case 'sfixed32':
+      case 'sfixed64':
+        return Mock.mock(`@integer(1,1000)`);
+      case 'double':
+      case 'float':
+        return Mock.mock(`@float( 1, 10, 2, 5 )`);
+      case 'bytes':
+        return new Buffer('Hello Apipost');
+      default:
+        return null;
+    }
+  }
+
+  function interpretMockViaFieldName(fieldName) {
+    const fieldNameLower = fieldName.toLowerCase();
+
+    if (fieldNameLower.startsWith('id') || fieldNameLower.endsWith('id')) {
+      return uuid.v4();
     }
 
-    // ssh 配置项
-    let sshConfig = {};
+    return Mock.mock(`@ctitle()`);
+  }
 
-    if (option.ssh.enable > 0) {
-      const ssh = option.ssh;
-      try {
-        switch (Number(ssh.enable)) {
-          case 2: // 公钥
-            _.assign(sshConfig, {
-              host: ssh.host,
-              port: ssh.port ? ssh.port : 22,
-              username: ssh.username,
-              privateKey: fs.readFileSync(ssh.privateKey)
-            });
-            break;
-          case 3: // 公钥+密码
-            _.assign(sshConfig, {
-              host: ssh.host,
-              port: ssh.port ? ssh.port : 22,
-              username: ssh.username,
-              privateKey: fs.readFileSync(ssh.privateKey),
-              passphrase: ssh.passphrase
-            });
-            break;
-          default: // 密码
-            _.assign(sshConfig, {
-              host: ssh.host,
-              port: ssh.port ? ssh.port : 22,
-              username: ssh.username,
-              password: ssh.password
-            });
-            break;
+  if (_.isObject(obj)) {
+    Object.keys(obj).forEach(key => {
+      if (obj[key].parent !== obj[key].resolvedType) {
+        if (obj[key].repeated) {
+          let random = Math.random() * 1000 + 1;
+          obj[key] = [mockField(obj[key]), parseInt(random)]
+        } else {
+          obj[key] = mockField(obj[key])
         }
-      } catch (e) {
-        reject({
-          err: 'error',
-          result: `SSH Config error: ${String(e)}`
-        })
       }
-    }
+    })
+  }
 
-    if (!_.isFunction(DBExec[option.type])) {
-      reject({
-        err: 'error',
-        result: `Unsupported ${option.type} database operations.`
-      })
-    } else {
-      const _dbconfig = _.cloneDeep(option.dbconfig, {
-        port: Number(option.dbconfig.port),
-        timeout: Number(option.dbconfig.timeout) >= 0 ? Number(option.dbconfig.timeout) : 10000
-      });
-
-      const _DBExec = await DBConnectTest[option?.type];
-
-      if (option.ssh.enable > 0) {
-        const sshClient = new Client();
-
-        sshClient.on('ready', () => {
-          sshClient.forwardOut(
-            '127.0.0.1',
-            0,
-            option.dbconfig.host,
-            option.dbconfig.port,
-
-            (err, stream) => {
-              if (err) {
-                reject({
-                  err: 'error',
-                  result: `SSH forwardOut error: ${String(err)}`
-                })
-                return sshClient.end();
-              } else {
-
-                switch (option.type) {
-                  case 'mysql':
-                    _.assign(_dbconfig, {
-                      stream: stream
-                    })
-                    break;
-                  case 'goldendb':
-                      _.assign(_dbconfig, {
-                        stream: stream
-                      })
-                      break; 
-                  case 'mssql':
-                    _.assign(_dbconfig, {
-                      port: stream.localPort
-                    })
-                    break;
-                  case 'redis':
-                    _.assign(_dbconfig, {
-                      socket: stream
-                    })
-                    break;
-                }
-
-                _DBExec(_dbconfig, resolve, reject, sshClient);
-              }
-            }
-          );
-        });
-
-        sshClient.on('error', (err) => {
-          reject({
-            err: 'error',
-            result: `SSH Client connect error: ${String(err)}`
-          })
-        });
-
-        sshClient.connect(sshConfig);
-      } else {
-        _DBExec(_dbconfig, resolve, reject);
-      }
-    }
-  })
+  return obj
 }
-module.exports = DatabaseQuery;
-module.exports.DatabaseQuery = DatabaseQuery;
-module.exports.DatabaseConnectTest = DatabaseConnectTest;
+
+// 内部函数，给 protobufjs 指定 import依赖
+function addIncludePathToRoot(root, includePaths) {
+  const originalResolvePath = root.resolvePath;
+  root.resolvePath = (origin, target) => {
+    if (path.isAbsolute(target)) {
+      return target;
+    }
+    for (const directory of includePaths) {
+      const fullPath = path.join(directory, target);
+      try {
+        fs.accessSync(fullPath, fs.constants.R_OK);
+        return fullPath;
+      } catch (err) {
+        continue;
+      }
+    }
+    return originalResolvePath(origin, target);
+  };
+}
+
+// 内部函数，结果转换函数
+function ConvertResult(status, message, data) {
+  return ASideTools.ConvertResult(status, message, data)
+}
+
+// 内部函数，递归遍历获取server
+function recursiveGetServer(root, services, nestedTypeName = '') {
+  if (root instanceof protobuf.Root || root instanceof protobuf.Namespace) {
+    Object.keys(root.nested || {}).forEach((key) => {
+      const nestedType = root.lookup(key);
+      if (nestedType instanceof protobuf.Service) {
+        // 发现了一个服务
+        services.push({
+          short: key,
+          service: nestedTypeName ? `${nestedTypeName}.${key}` : key
+        });
+      } else {
+        // 递归查找更深层的服务
+        recursiveGetServer(nestedType, services, nestedTypeName ? `${nestedTypeName}.${key}` : key);
+      }
+    });
+  }
+}
+
+module.exports = GrpcClient;
