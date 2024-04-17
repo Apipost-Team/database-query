@@ -1,6 +1,6 @@
 const mysql = require('mysql2'),
   mssql = require('mssql'),
-  MongoClient = require('mongodb').MongoClient,
+  // MongoClient = require('mongodb').MongoClient,
   { Pool } = require('pg'),
   { createClient } = require('redis'),
   oracledb = require('oracledb'),
@@ -309,25 +309,25 @@ const DBConnectTest = {
       _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
     }
   }, // to test todo
-  mongodb: function (dbconfig, resolve, reject, sshClient) {
-    MongoClient.connect(`mongodb://${dbconfig.user}:${dbconfig.password}@${dbconfig.host}:${dbconfig.port > 0 ? dbconfig.port : 27017}/${dbconfig.auth_source ? dbconfig.auth_source : dbconfig.database}`).then((client) => {
+  // mongodb: function (dbconfig, resolve, reject, sshClient) {
+  //   MongoClient.connect(`mongodb://${dbconfig.user}:${dbconfig.password}@${dbconfig.host}:${dbconfig.port > 0 ? dbconfig.port : 27017}/${dbconfig.auth_source ? dbconfig.auth_source : dbconfig.database}`).then((client) => {
 
-      resolve({
-        err: 'success',
-        result: `MongoDB connect success.`
-      })
+  //     resolve({
+  //       err: 'success',
+  //       result: `MongoDB connect success.`
+  //     })
 
-      _.isFunction(client.close) && client.close();
-    }).catch((err) => {
-      reject({
-        err: 'error',
-        result: `MongoDB connect error: ${String(err)}`
-      })
-    }).finally(() => {
+  //     _.isFunction(client.close) && client.close();
+  //   }).catch((err) => {
+  //     reject({
+  //       err: 'error',
+  //       result: `MongoDB connect error: ${String(err)}`
+  //     })
+  //   }).finally(() => {
 
-      _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
-    });
-  }, // 目前仅支持 findOne 的操作，Finished to select method
+  //     _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
+  //   });
+  // }, // 目前仅支持 findOne 的操作，Finished to select method
   redis: async function (dbconfig, resolve, reject, sshClient) {
     const client = createClient({
       url: `redis://${dbconfig.user}:${dbconfig.password}@${dbconfig.host}:${dbconfig.port > 0 ? dbconfig.port : 6380}/${dbconfig.database ? dbconfig.database : 1}`
@@ -652,69 +652,69 @@ const DBExec = {
       _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
     }
   }, // to test todo
-  mongodb: function (dbconfig, query, resolve, reject, sshClient) {
-    if (!_.isString(_.get(query, 'collectionName'))) {
-      reject({
-        err: 'error',
-        result: `Incorrect collectionName name`
-      });
-      _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
-    } else {
-      let _collectionName = _.get(query, 'collectionName');
-      let _method = _.get(query, 'method');
-      let _data = _.get(query, 'data');
+  // mongodb: function (dbconfig, query, resolve, reject, sshClient) {
+  //   if (!_.isString(_.get(query, 'collectionName'))) {
+  //     reject({
+  //       err: 'error',
+  //       result: `Incorrect collectionName name`
+  //     });
+  //     _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
+  //   } else {
+  //     let _collectionName = _.get(query, 'collectionName');
+  //     let _method = _.get(query, 'method');
+  //     let _data = _.get(query, 'data');
 
-      MongoClient.connect(`mongodb://${dbconfig.user}:${dbconfig.password}@${dbconfig.host}:${dbconfig.port > 0 ? dbconfig.port : 27017}/${dbconfig.auth_source ? dbconfig.auth_source : dbconfig.database}`).then((client) => {
-        const collection = client.db(dbconfig.database).collection(_collectionName);
+  //     MongoClient.connect(`mongodb://${dbconfig.user}:${dbconfig.password}@${dbconfig.host}:${dbconfig.port > 0 ? dbconfig.port : 27017}/${dbconfig.auth_source ? dbconfig.auth_source : dbconfig.database}`).then((client) => {
+  //       const collection = client.db(dbconfig.database).collection(_collectionName);
 
-        if (_.isFunction(collection[_method])) {
-          // 查询文档
-          try {
-            let _para_data = {};
+  //       if (_.isFunction(collection[_method])) {
+  //         // 查询文档
+  //         try {
+  //           let _para_data = {};
 
-            if (_.isString(_data)) {
-              try {
-                _para_data = JSON5.parse(_data);
-              } catch (e) { }
-            } else if (_.isObject(_data)) {
-              _para_data = _data;
-            }
+  //           if (_.isString(_data)) {
+  //             try {
+  //               _para_data = JSON5.parse(_data);
+  //             } catch (e) { }
+  //           } else if (_.isObject(_data)) {
+  //             _para_data = _data;
+  //           }
 
-            collection[_method](_para_data).then((results) => {
-              resolve({
-                err: 'success',
-                result: [JSON5.parse(JSON5.stringify(results))]
-              })
-            }).catch((err) => {
-              reject({
-                err: 'error',
-                result: `MongoDB query error: ${String(err)}`
-              })
-            });
-          } catch (e) {
-            reject({
-              err: 'error',
-              result: `MongoDB query error: ${String(e)}`
-            })
-          }
-        } else {
-          reject({
-            err: 'error',
-            result: `MongoDB connect error: ${_method} is not supported.`
-          })
-        }
+  //           collection[_method](_para_data).then((results) => {
+  //             resolve({
+  //               err: 'success',
+  //               result: [JSON5.parse(JSON5.stringify(results))]
+  //             })
+  //           }).catch((err) => {
+  //             reject({
+  //               err: 'error',
+  //               result: `MongoDB query error: ${String(err)}`
+  //             })
+  //           });
+  //         } catch (e) {
+  //           reject({
+  //             err: 'error',
+  //             result: `MongoDB query error: ${String(e)}`
+  //           })
+  //         }
+  //       } else {
+  //         reject({
+  //           err: 'error',
+  //           result: `MongoDB connect error: ${_method} is not supported.`
+  //         })
+  //       }
 
-        _.isFunction(client.close) && client.close();
-      }).catch((err) => {
-        reject({
-          err: 'error',
-          result: `MongoDB connect error: ${String(err)}`
-        })
-      }).finally(() => {
-        _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
-      });
-    }
-  }, // todo
+  //       _.isFunction(client.close) && client.close();
+  //     }).catch((err) => {
+  //       reject({
+  //         err: 'error',
+  //         result: `MongoDB connect error: ${String(err)}`
+  //       })
+  //     }).finally(() => {
+  //       _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
+  //     });
+  //   }
+  // }, // todo
   redis: async function (dbconfig, query, resolve, reject, sshClient) {
     const client = createClient({
       url: `redis://${dbconfig.user}:${dbconfig.password}@${dbconfig.host}:${dbconfig.port > 0 ? dbconfig.port : 6380}/${dbconfig.database ? dbconfig.database : 1}`
