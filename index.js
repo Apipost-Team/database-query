@@ -413,6 +413,13 @@ const DBExec = {
       port: _.isInteger(dbconfig.port) ? dbconfig.port : 3306
     }));
 
+    connection.on('error', (err) => {
+      reject({
+        err: 'error',
+        result: `MySQL connection error: ${String(err)}`
+      })
+    });
+
     connection.connect((err) => {
       if (err) {
         _.isObject(sshClient) && _.isFunction(sshClient.end) && sshClient.end();
@@ -451,6 +458,13 @@ const DBExec = {
     const connection = mysql.createConnection(_.assign(dbconfig, {
       port: _.isInteger(dbconfig.port) ? dbconfig.port : 3306
     }));
+
+    connection.on('error', (err) => {
+      reject({
+        err: 'error',
+        result: `MySQL connection error: ${String(err)}`
+      })
+    });
 
     connection.connect((err) => {
       if (err) {
@@ -791,7 +805,7 @@ const DBExec = {
     async function createPool() {
       try {
         let db = require('dmdb');
-        
+
         return db.createPool({
           connectString: `dm://${dbconfig.user}:${dbconfig.password}@${dbconfig.host}:${dbconfig.port > 0 ? dbconfig.port : 5236}?loginEncrypt=false&autoCommit=false`,
           poolMax: 10,
@@ -937,10 +951,10 @@ function DatabaseQuery(option, query) {
                     })
                     break;
                   case 'goldendb':
-                      _.assign(_dbconfig, {
-                        stream: stream
-                      })
-                      break; 
+                    _.assign(_dbconfig, {
+                      stream: stream
+                    })
+                    break;
                   case 'mssql':
                     _.assign(_dbconfig, {
                       port: stream.localPort
@@ -1067,10 +1081,10 @@ function DatabaseConnectTest(option) {
                     })
                     break;
                   case 'goldendb':
-                      _.assign(_dbconfig, {
-                        stream: stream
-                      })
-                      break; 
+                    _.assign(_dbconfig, {
+                      stream: stream
+                    })
+                    break;
                   case 'mssql':
                     _.assign(_dbconfig, {
                       port: stream.localPort
