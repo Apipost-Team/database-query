@@ -769,8 +769,10 @@ const DBExec = {
         results = {};
 
       if (_.isFunction(client[redisMethod])) {
-        if (['set', 'get', 'del', 'exists', 'incr', 'decr', 'lpop', 'rpop', 'hgetall', 'smembers'].indexOf(dbconfig?.method) > -1) {
+        if (['get', 'del', 'exists', 'incr', 'decr', 'lpop', 'rpop', 'hgetall', 'smembers'].indexOf(dbconfig?.method) > -1) {
           results = await client[redisMethod](_.get(data, 'key'));
+        } else if (['set'].indexOf(dbconfig?.method) > -1) {
+          results = await client[redisMethod](_.get(data, 'key'), _.get(data, 'value'));
         } else if (['hset'].indexOf(dbconfig?.method) > -1) {
           results = await client[redisMethod](_.get(data, 'key'), _.get(data, 'field'), _.get(data, 'value'));
         } else if (['hget'].indexOf(dbconfig?.method) > -1) {
