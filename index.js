@@ -737,18 +737,52 @@ const DBExec = {
     try {
       await client.connect();
 
-      let data = [];
+      let data = _.cloneDeep(query);
 
-      if (_.isString(query?.data)) {
+      if (_.isString(query)) {
         try {
-          data = JSON5.parse(query?.data);
-        } catch (e) { }
-      } else if (_.isObject(query?.data)) {
-        data = query?.data;
+          data = JSON5.parse(query);
+        } catch (e) {
+          data = {}
+        }
       }
+      const redisMethodsMap = {
+        set: "set",
+        get: "get",
+        del: "del",
+        exists: "exists",
+        incr: "incr",
+        decr: "decr",
+        lpop: "lPop",
+        rpop: "rPop",
+        hset: "hSet",
+        hget: "hGet",
+        hmset: "hSet",
+        hgetall: "hGetAll",
+        lpush: "lPush",
+        rpush: "rPush",
+        sadd: "sAdd",
+        smembers: "sMembers"
+      };
 
-      if (_.isFunction(client[query?.method])) {
-        const results = await client[query?.method](..._.values(data));
+      let redisMethod = _.get(redisMethodsMap, dbconfig?.method) || 'get',
+        results = {};
+
+      if (_.isFunction(client[redisMethod])) {
+        if (['set', 'get', 'del', 'exists', 'incr', 'decr', 'lpop', 'rpop', 'hgetall', 'smembers'].indexOf(dbconfig?.method) > -1) {
+          results = await client[redisMethod](_.get(data, 'key'));
+        } else if (['hset'].indexOf(dbconfig?.method) > -1) {
+          results = await client[redisMethod](_.get(data, 'key'), _.get(data, 'field'), _.get(data, 'value'));
+        } else if (['hget'].indexOf(dbconfig?.method) > -1) {
+          results = await client[redisMethod](_.get(data, 'key'), _.get(data, 'field'));
+        } else if (['lpush', 'rpush', 'sadd'].indexOf(dbconfig?.method) > -1) {
+          results = await client[redisMethod](_.get(data, 'key'), _.slice(_.values(data), 1));
+        } else if (['hmset'].indexOf(dbconfig?.method) > -1) {
+          let key = data.key;
+          let fieldsAndValues = _.flatMap(_.omit(data, 'key'), (value, field) => [field, value]);
+          results = await client[redisMethod](key, fieldsAndValues);
+        }
+
         resolve({
           err: 'success',
           result: results
@@ -756,7 +790,7 @@ const DBExec = {
       } else {
         reject({
           err: 'error',
-          result: `Redis query error ${query?.method} is not supported.`
+          result: `Redis query error ${redisMethod} is not supported.`
         })
       }
     } catch (err) {
@@ -864,11 +898,15 @@ function DatabaseQuery(option, query) {
       })
     }
 
-    if (!_.isObject(query) && ['redis'].indexOf(option.type) > -1) {
-      reject({
-        err: 'error',
-        result: 'Request parameter query must be a Object'
-      })
+    if (['redis'].indexOf(option.type) > -1) {
+      try {
+        JSON.parse(query)
+      } catch (e) {
+        reject({
+          err: 'error',
+          result: 'Request parameter query must be a Object'
+        })
+      }
     }
 
     // ssh 配置项
@@ -922,6 +960,11 @@ function DatabaseQuery(option, query) {
         port: Number(option.dbconfig.port),
         timeout: Number(option.dbconfig.timeout) >= 0 ? Number(option.dbconfig.timeout) : 10000
       });
+      const method = _.get(option, 'method');
+
+      if (!_.isEmpty(method) && _.isString(method)) {
+        _.assign(_dbconfig, { method })
+      }
 
       const _DBExec = await DBExec[option.type];
 
